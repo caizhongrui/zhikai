@@ -3,7 +3,7 @@ name: Build Windows Installer
 
 on:
   push:
-    branches: [ main, maxian-agent-release, day2-complete-kilocode-migration ]
+    branches: [ main, maxian-agent-release, day2-complete-kilocode-migration, plan-d4-bundle-only ]
   pull_request:
     branches: [ main, maxian-agent-release ]
   workflow_dispatch:  # 允许手动触发
