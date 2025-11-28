@@ -3,7 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { session } from 'electron';
+import { session, net } from 'electron';
+import { promises as fs } from 'fs';
 import { Disposable, IDisposable, toDisposable } from '../../../base/common/lifecycle.js';
 import { COI, FileAccess, Schemas } from '../../../base/common/network.js';
 import { basename, extname, normalize } from '../../../base/common/path.js';
@@ -49,15 +50,15 @@ export class ProtocolMainService extends Disposable implements IProtocolMainServ
 	private handleProtocols(): void {
 		const { defaultSession } = session;
 
-		// Register vscode-file:// handler
-		defaultSession.protocol.registerFileProtocol(Schemas.vscodeFileResource, (request, callback) => this.handleResourceRequest(request, callback));
+		// Register vscode-file:// handler using new protocol.handle API (Electron 25+)
+		defaultSession.protocol.handle(Schemas.vscodeFileResource, (request) => this.handleResourceRequestNew(request));
 
 		// Block any file:// access
 		defaultSession.protocol.interceptFileProtocol(Schemas.file, (request, callback) => this.handleFileRequest(request, callback));
 
 		// Cleanup
 		this._register(toDisposable(() => {
-			defaultSession.protocol.unregisterProtocol(Schemas.vscodeFileResource);
+			defaultSession.protocol.unhandle(Schemas.vscodeFileResource);
 			defaultSession.protocol.uninterceptProtocol(Schemas.file);
 		}));
 	}
@@ -90,6 +91,60 @@ export class ProtocolMainService extends Disposable implements IProtocolMainServ
 	//#endregion
 
 	//#region vscode-file://
+
+	private async handleResourceRequestNew(request: Request): Promise<Response> {
+		try {
+			const path = this.requestToNormalizedFilePath({ url: request.url } as Electron.ProtocolRequest);
+
+			// Check security - validate root
+			const isValidRoot = this.validRoots.findSubstr(path);
+			const isValidExt = this.validExtensions.has(extname(path).toLowerCase());
+
+			if (!isValidRoot && !isValidExt) {
+				this.logService.error(`${Schemas.vscodeFileResource}: Refused to load resource ${path} from ${Schemas.vscodeFileResource}: protocol (original URL: ${request.url})`);
+				return new Response(null, {
+					status: 403,
+					statusText: 'Forbidden'
+				});
+			}
+
+			// Read file content
+			const content = await fs.readFile(path);
+
+			// Build headers
+			let headers: Record<string, string> = {};
+
+			// Add COI headers if needed
+			if (this.environmentService.crossOriginIsolated) {
+				const pathBasename = basename(path);
+				if (pathBasename === 'workbench.html' || pathBasename === 'workbench-dev.html') {
+					headers = { ...COI.CoopAndCoep };
+				} else {
+					const coiHeaders = COI.getHeadersFromQuery(request.url);
+					if (coiHeaders) {
+						headers = { ...headers, ...coiHeaders };
+					}
+				}
+			}
+
+			// Add Content-Type header
+			const mimeType = this.getMimeType(path);
+			if (mimeType) {
+				headers['Content-Type'] = mimeType;
+			}
+
+			return new Response(content, {
+				status: 200,
+				headers
+			});
+		} catch (error) {
+			this.logService.error(`Failed to load resource: ${error}`);
+			return new Response(null, {
+				status: 500,
+				statusText: 'Internal Server Error'
+			});
+		}
+	}
 
 	private getMimeType(path: string): string | undefined {
 		const ext = extname(path).toLowerCase();
@@ -129,20 +184,23 @@ export class ProtocolMainService extends Disposable implements IProtocolMainServ
 			}
 		}
 
-		// Get MIME type for the file and set it in headers
+		// Get MIME type for the file
 		const mimeType = this.getMimeType(path);
+
+		// Set MIME type in headers (标准方式)
 		if (mimeType) {
 			headers = { ...headers, 'Content-Type': mimeType };
 		}
 
 		// first check by validRoots
 		if (this.validRoots.findSubstr(path)) {
-			return callback({ path, headers });
+			// 双保险：同时使用 headers 和 mimeType（虽然 TS 定义没有，但运行时可能支持）
+			return callback({ path, headers, mimeType: mimeType } as any);
 		}
 
 		// then check by validExtensions
 		if (this.validExtensions.has(extname(path).toLowerCase())) {
-			return callback({ path, headers });
+			return callback({ path, headers, mimeType: mimeType } as any);
 		}
 
 		// finally block to load the resource
