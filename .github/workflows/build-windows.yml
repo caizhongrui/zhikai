@@ -40,9 +40,9 @@ jobs:
     - name: 编译扩展
       run: npm run compile-extensions-build
 
-    - name: 构建 Windows 客户端 (x64)
+    - name: 构建 Windows 客户端 (x64) - Bundle only (跳过minify)
       run: |
-        npm run gulp vscode-win32-x64-min
+        npm run gulp vscode-win32-x64
         npm run gulp vscode-win32-x64-inno-updater
 
     - name: 生成系统级安装包
