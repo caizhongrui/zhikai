@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="extract2">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/out-build/vs/base/test/node/zip/fixtures/extract.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>
